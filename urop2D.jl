@@ -6,7 +6,8 @@ using Distances
 using DifferentialEquations
 using Suppressor
 using ProgressBars
-
+using CSV
+using DataFrames
 
 #########################################
 ########    CONSTANTS           #########
@@ -31,10 +32,8 @@ totale=Any[]          #holds all total energy values for each timestep
 
 
 #number of electrons
-num_e=10
+num_e=5
 
-#magnetic field  (if too big then discontinuity error)
-B=[0,0,10^-10]
 
 #timepoints
 num_seconds=10.0
@@ -43,10 +42,12 @@ timestep=num_seconds/num_steps
 timespan=(0.0,timestep)
 
 #initial position conditions
-upper_x = 30.0
-lower_x = -30.0
-upper_y = 30.0
-lower_y = -30.0
+bound=5.0
+
+upper_x = bound
+lower_x = -bound
+upper_y = bound
+lower_y = -bound
 
 initpos=Any[]
 while(length(initpos)<num_e)
@@ -62,13 +63,12 @@ println(initpos)
 #add initial conditions to arrays
 for i=1:num_e
     push!(positions,[initpos[i]])
-    push!(velocities,[[0.0,0.0]])
+    push!(velocities,[[0.0]])
     push!(electrons,[initpos[i],[0.0,0.0],[0.0,0.0]])       # 0 velocities, 0 force
 end
 
 #settings
-animation=false
-confined=true
+iontrap=true
 
 
 #########################################
@@ -100,6 +100,20 @@ function PotE(dist::Float64)
         return (k*elecCharge^2)/dist
 end
 
+#THIS IS CHEAT VERSION, NEED ACTUAL HEAVISIDE
+function heaviside(bound,xpos,ypos)
+        if (xpos<bound && xpos>-bound && ypos >-bound && ypos<bound)
+                return 1
+        else
+                return 0
+        end
+end
+
+
+
+electron_ke = Any[]
+
+sub_ke = []
 
 
 #########################################
@@ -113,6 +127,7 @@ for x = tqdm(1:Int(num_steps)-1)
         local pe_now = 0.0
         local counter = 1
         local pos_now = []
+        local sub_ke = []
 
 
         for e = 1:num_e
@@ -123,6 +138,12 @@ for x = tqdm(1:Int(num_steps)-1)
                 ke_now = ke_now + Kinetic(electrons[e][2])
 
         end
+
+        for e = 1:num_e
+                push!(sub_ke, Kinetic(electrons[e][2])/ke_now*100)
+        end
+
+        push!(electron_ke, sub_ke)
 
 
         for e = 1:num_e
@@ -146,10 +167,7 @@ for x = tqdm(1:Int(num_steps)-1)
                         distance = euclidean(electrons[e][1], pos_now[j])
 
                         #adds nothing to force when the loop considers an electron with itself
-                        if (distance == 0.0)
-                                fnet = fnet + [0.0,0.0]
-
-                        else
+                        if (distance != 0.0)
                                 #finds the position vector between 2 electrons
                                 pos_vectors = electrons[e][1] - pos_now[j]
 
@@ -164,13 +182,21 @@ for x = tqdm(1:Int(num_steps)-1)
                         end
                 end
 
-                #finds mag force, adds to net force
-                if (confined)
-                        vel=[electrons[e][2][1],electrons[e][2][2],0]
-                        fmag=elecCharge*cross(vel,B)
-                        fnet[1]=fnet[1]+fmag[1]
-                        fnet[2]=fnet[2]+fmag[2]
+                #implements ion trap
+                if (iontrap)
+                        omega= 5.0
+                        r=10.0
+                        ax=0.4
+                        qx=0.1
+                        U= (ax*mass*r^2*omega^2)/(8*elecCharge)
+                        V= (qx*mass*r^2*omega^2)/(-4*elecCharge)
+                        fx= -4*elecCharge*(U+V*cos(omega*x))*electrons[e][1][1]/omega^2
+                        fy= -4*elecCharge*(U+V*cos(omega*x))*electrons[e][1][2]/omega^2
+
+                        heavi=heaviside(r,electrons[e][1][1],electrons[e][1][2])
+                        fnet=(fnet+[fx,fy])*heavi
                 end
+
                 #updates the current force on the electron
                 electrons[e][3]=fnet
 
@@ -189,7 +215,7 @@ for x = tqdm(1:Int(num_steps)-1)
 
                 #update pos and vel for electron using ODE solution. Adds new pos and vel to respective arrays
                         push!(positions[e],[sol[2][3],sol[2][4]])
-                        push!(velocities[e],[sol[2][1],sol[2][2]])
+                        push!(velocities[e],[sqrt(sol[2][1]^2+sol[2][2]^2)])
                         electrons[e][2]=[sol[2][1],sol[2][2]]
                         electrons[e][1]= [sol[2][3],sol[2][4]]
 
@@ -197,10 +223,6 @@ for x = tqdm(1:Int(num_steps)-1)
                 if(x==1)
                         global beginningpe=pe_now
                 end
-
-                # for e=1:num_e
-                #         println(f,positions[e][x+1])
-                # end
 
         end
 
@@ -210,6 +232,10 @@ for x = tqdm(1:Int(num_steps)-1)
         push!(totale,ke_now+pe_now)
 
 end
+for e = 1:num_e
+        push!(sub_ke, 0)
+end
+push!(electron_ke,sub_ke)
 
 finale=ke[Int(num_steps)-1]+pe[Int(num_steps)-1]
 
@@ -218,10 +244,7 @@ println("the final tote of the system is: ", finale)
 println("The % error is: ", 100*((finale-beginningpe)/beginningpe))
 println("the final ke of the system is: ", ke[Int(num_steps)-1])
 println("the final pe of the system is: ", pe[Int(num_steps)-1])
-println("the final pos of e1 is: ", electrons[1][1])
-println("the final pos of e2 is: ", electrons[2][1])
-println("the final vel of e1 is: ", electrons[1][2])
-println("the final vel of e2 is: ", electrons[2][2])
+
 
 
 #########################################
@@ -235,40 +258,29 @@ for e=1:num_e
                 println(f, positions[e][i])
         end
 end
+
+#create a DataFrame
+
+#position
+df = DataFrame(x = Any[], y = Any[], z = Any[])
+for i = 1:(Int(num_steps))
+        for e = 1:num_e
+                push!(df, (positions[e][i][1], positions[e][i][2], electron_ke[i][e]))
+        end
+end
+show(df, summary = false)
+CSV.write("/Users/drewj/Documents/atom/uropjulia/positions.csv", df)
+
 close(f)
 
-v=open("velocities.txt", "w")
-for e=1:num_e
-        for i=1:Int(num_steps)
-                println(v, (velocities[e][i]))
+#velocity
+dftwo = DataFrame(x = Any[], y = Any[])
+for i = 1:(Int(num_steps))
+        for e = 1:num_e
+                push!(dftwo, (velocities[e][i], i))
         end
 end
-close(v)
+show(dftwo, summary = false)
+CSV.write("/Users/drewj/Documents/atom/uropjulia/velocities.csv", df)
 
-#animation
-global plt=plot(xlims=(-100,100),ylims=(-100,100),legend=false, widen=true)
-
-if (animation==true)
-        xdata=Any[]
-        ydata=Any[]
-
-        for e=1:num_e
-                global xlist=Any[]
-                global ylist=Any[]
-                for i=1:length(positions[1])
-                        push!(xlist, positions[e][i][1])
-                        push!(ylist, positions[e][i][2])
-                end
-                push!(xdata,xlist)
-                push!(ydata,ylist)
-        end
-
-        global plt=plot(xlims=(-100,100),ylims=(-100,100),legend=false,widen=true)
-        global anim = @animate for i = tqdm(1:Int(num_steps))
-                for e=1:num_e
-                    plot!(plt,xdata[e][i:i+1], ydata[e][i:i+1],linewidth=2,linealpha=1)
-                end
-        end every 500
-
-        gif(anim, "anim.gif", fps = 5)
-end
+close(f)
