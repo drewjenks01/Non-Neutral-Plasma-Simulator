@@ -32,7 +32,7 @@ totale=Any[]          #holds all total energy values for each timestep
 
 
 #number of electrons
-num_e=5
+num_e=10
 
 
 #timepoints
@@ -49,7 +49,9 @@ lower_x = -bound
 upper_y = bound
 lower_y = -bound
 
-initpos=Any[]
+#initpos=Any[[-1.0,-1.0]]
+
+#random initial positions
 while(length(initpos)<num_e)
         for i=1:num_e
                 pos=[rand(lower_x:upper_x),rand(lower_y:upper_y)]
@@ -58,14 +60,17 @@ while(length(initpos)<num_e)
                 end
         end
 end
-println(initpos)
+
 
 #add initial conditions to arrays
 for i=1:num_e
     push!(positions,[initpos[i]])
     push!(velocities,[[0.0]])
-    push!(electrons,[initpos[i],[0.0,0.0],[0.0,0.0]])       # 0 velocities, 0 force
+    push!(electrons,[initpos[i],[0.0,0.0],[0.0,0.0],i])       # 0 velocities, 0 force
 end
+
+global force_electrons=electrons
+global nonforce_electrons=[]
 
 #settings
 iontrap=true
@@ -127,7 +132,20 @@ for x = tqdm(1:Int(num_steps)-1)
         local pe_now = 0.0
         local counter = 1
         local pos_now = []
+        local force_pos_now = []
         local sub_ke = []
+
+
+        for e = 1:length(force_electrons)
+                if (heaviside(r,force_electrons[e][1][1],force_electrons[e][1][2]) == 0)
+                        push!(nonforce_electrons,force_electrons[e])
+                        force_electrons[e]=0
+                end
+        end
+
+        global force_electrons=filter(x->x≠0,force_electrons)
+        println("F: "*string(length(force_electrons))*"     R: "*string(length(electrons)))
+
 
 
         for e = 1:num_e
@@ -137,6 +155,10 @@ for x = tqdm(1:Int(num_steps)-1)
                 #adds KE from each electrons together
                 ke_now = ke_now + Kinetic(electrons[e][2])
 
+        end
+
+        for e =1:length(force_electrons)
+                push!(force_pos_now,force_electrons[e][1])
         end
 
         for e = 1:num_e
@@ -158,18 +180,19 @@ for x = tqdm(1:Int(num_steps)-1)
 
 
         #finds total force on each electron
-        for e = 1:num_e
+        for e = 1:length(force_electrons)
+
                 fnet = [0.0, 0.0]
                 #solves for force
-                for j = 1:num_e
+                for j = 1:length(force_electrons)
 
                         #distance between electrons
-                        distance = euclidean(electrons[e][1], pos_now[j])
+                        distance = euclidean(force_electrons[e][1], force_pos_now[j])
 
                         #adds nothing to force when the loop considers an electron with itself
                         if (distance != 0.0)
                                 #finds the position vector between 2 electrons
-                                pos_vectors = electrons[e][1] - pos_now[j]
+                                pos_vectors = force_electrons[e][1] - force_pos_now[j]
 
                                 #finds the unit vectors between 2 electrons
                                 unit_vectors = pos_vectors/distance
@@ -184,27 +207,33 @@ for x = tqdm(1:Int(num_steps)-1)
 
                 #implements ion trap
                 if (iontrap)
-                        omega= 5.0
+                        omega= 10.0
                         r=10.0
-                        ax=0.4
-                        qx=0.1
+                        ax=0.2
+                        qx=0.5
                         U= (ax*mass*r^2*omega^2)/(8*elecCharge)
                         V= (qx*mass*r^2*omega^2)/(-4*elecCharge)
-                        fx= -4*elecCharge*(U+V*cos(omega*x))*electrons[e][1][1]/omega^2
-                        fy= -4*elecCharge*(U+V*cos(omega*x))*electrons[e][1][2]/omega^2
+                        fx= -2*elecCharge*(U+V*cos(omega*x))*force_electrons[e][1][1]/omega^2
+                        fy= -2*elecCharge*(U+V*cos(omega*x))*force_electrons[e][1][2]/omega^2
 
-                        heavi=heaviside(r,electrons[e][1][1],electrons[e][1][2])
+                        #PE of trap
+                        pot_0 = 2*(U + V * cos(omega*x))
+                        potential = pot_0/(2*r^2)*((force_electrons[e][1][1])^2 - (force_electrons[e][1][2])^2)
+                        pe_trap = elecCharge * potential
+                        pe_now += pe_trap
+
+                        heavi=heaviside(r,force_electrons[e][1][1],force_electrons[e][1][2])
                         fnet=(fnet+[fx,fy])*heavi
                 end
 
                 #updates the current force on the electron
-                electrons[e][3]=fnet
+                force_electrons[e][3]=fnet
 
                 #initial values for the ODE
-                u0 = [electrons[e][2][1],electrons[e][2][2],electrons[e][1][1],electrons[e][1][2]]
+                u0 = [force_electrons[e][2][1],force_electrons[e][2][2],force_electrons[e][1][1],force_electrons[e][1][2]]
 
                 #parameters for the ODE (force)
-                param=electrons[e][3]
+                param=force_electrons[e][3]
 
                 @suppress begin
 
@@ -214,16 +243,22 @@ for x = tqdm(1:Int(num_steps)-1)
 
 
                 #update pos and vel for electron using ODE solution. Adds new pos and vel to respective arrays
-                        push!(positions[e],[sol[2][3],sol[2][4]])
-                        push!(velocities[e],[sqrt(sol[2][1]^2+sol[2][2]^2)])
-                        electrons[e][2]=[sol[2][1],sol[2][2]]
-                        electrons[e][1]= [sol[2][3],sol[2][4]]
+                        push!(positions[force_electrons[e][4]],[sol[2][3],sol[2][4]])
+                        push!(velocities[force_electrons[e][4]],[sqrt(sol[2][1]^2+sol[2][2]^2)])
+                        force_electrons[e][2]=[sol[2][1],sol[2][2]]
+                        force_electrons[e][1]= [sol[2][3],sol[2][4]]
 
                 end
                 if(x==1)
                         global beginningpe=pe_now
                 end
 
+
+
+        end
+        for e=1:length(nonforce_electrons)
+                push!(positions[nonforce_electrons[e][4]],[10^3,10^3])
+                push!(velocities[nonforce_electrons[e][4]],nonforce_electrons[e][2])
         end
 
         #adds energies to respective arrays
@@ -284,3 +319,10 @@ show(dftwo, summary = false)
 CSV.write("/Users/drewj/Documents/atom/uropjulia/velocities.csv", df)
 
 close(f)
+
+#plot energy
+time = (0:num_seconds/num_steps:num_seconds-2*num_seconds/num_steps)
+plotly()
+plot(time, ke, label = "KE")
+plot!(time, pe, label = "PE")
+plot!(time, ke+pe, label = "TOTAL E")
