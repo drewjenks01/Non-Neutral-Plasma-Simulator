@@ -147,6 +147,7 @@ end
 electronCount = []              #used for plotting electron count over time
 push!(electronCount, num_e)
 
+
 forceCount = [[] for i = 1:num_e]       #keeps track of forces on electrons left in trap
 
 vels=Any[]      #used for plotting acceleration
