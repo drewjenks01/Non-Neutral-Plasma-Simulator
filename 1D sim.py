@@ -67,7 +67,7 @@ for i in range (num_e):
     
     
 
-
+# use specified initial positions for testing 
 # electrons.append(ec.electron(-16.28813296526114,0,0,n))
 # electrons.append(ec.electron(-11.782512519758592,0,0,n))
 # electrons.append(ec.electron(-6.981923432847982,0,0,n))
